@@ -165,7 +165,11 @@ impl crate::TermWindow {
         fn phys(x: usize, num_cols: usize, direction: Direction) -> usize {
             match direction {
                 Direction::LeftToRight => x,
-                Direction::RightToLeft => num_cols - x,
+                // Map logical cell index to physical cell index for RTL.
+                // The last column index is `num_cols - 1`, so subtract one
+                // to avoid off-by-one placement that stacks glyphs at the
+                // wrong edge of the line.
+                Direction::RightToLeft => (num_cols - 1).saturating_sub(x),
             }
         }
 
