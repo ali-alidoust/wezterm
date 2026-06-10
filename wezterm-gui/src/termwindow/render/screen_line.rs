@@ -91,6 +91,28 @@ impl crate::TermWindow {
         let (_bidi_enabled, bidi_direction) = params.line.bidi_info();
         let direction = bidi_direction.direction();
 
+        fn phys(x: usize, num_cols: usize, direction: Direction) -> usize {
+            match direction {
+                Direction::LeftToRight => x,
+                Direction::RightToLeft => (num_cols - 1).saturating_sub(x),
+            }
+        }
+
+        fn cluster_left_cell(
+            first_cell_idx: usize,
+            cluster_width: usize,
+            num_cols: usize,
+            direction: Direction,
+        ) -> usize {
+            match direction {
+                Direction::LeftToRight => phys(first_cell_idx, num_cols, direction),
+                Direction::RightToLeft => {
+                    let last_logical = first_cell_idx + cluster_width.saturating_sub(1);
+                    phys(last_logical, num_cols, direction)
+                }
+            }
+        }
+
         // Do we need to shape immediately, or can we use the pre-shaped data?
         if let Some(composing) = composing {
             composition_width = unicode_column_width(composing, None);
@@ -109,12 +131,6 @@ impl crate::TermWindow {
         } else {
             0..0
         };
-
-        // cursor_range_pixels will be computed after we have shaped the line,
-        // because when pixel positioning is enabled we need the shaper's
-        // per-cluster pixel positions to compute an accurate pixel range for
-        // the cursor. We'll set it after shaping.
-        let mut cursor_range_pixels: Range<f32> = 0.0..0.0;
 
         let mut shaped = None;
         let mut invalidate_on_hover_change = false;
@@ -158,45 +174,46 @@ impl crate::TermWindow {
             shaped
         };
 
-        // Recompute cursor_range_pixels now that we have the shaped clusters.
-        if cursor_range.is_empty() {
-            cursor_range_pixels = 0.0..0.0;
-        } else if !params.use_pixel_positioning {
-            cursor_range_pixels = params.left_pixel_x + cursor_range.start as f32 * cell_width
-                ..params.left_pixel_x + cursor_range.end as f32 * cell_width;
-        } else {
-            // Use shaped cluster pixel positions to compute the cursor range.
-            let mut start = std::f32::INFINITY;
-            let mut end = std::f32::NEG_INFINITY;
+        let cell_boundary_pixel = |cell_idx: usize| -> f32 {
+            if !params.use_pixel_positioning {
+                return params.left_pixel_x + cell_idx as f32 * cell_width;
+            }
+
+            let cell_idx = cell_idx.min(num_cols);
             for item in shaped.iter() {
                 let cluster = &item.cluster;
-                let cluster_start = cluster.first_cell_idx;
-                let cluster_end = cluster_start + cluster.width as usize;
-                let inter_start = cursor_range.start.max(cluster_start);
-                let inter_end = cursor_range.end.min(cluster_end);
-                if inter_end <= inter_start {
+                let start = cluster.first_cell_idx;
+                let end = start + cluster.width as usize;
+                if cell_idx < start || cell_idx > end {
                     continue;
                 }
 
-                let cells_before = (inter_start - cluster_start) as f32;
-                let cells_inter = (inter_end - inter_start) as f32;
-                let per_cell = if cluster.width > 0 {
-                    item.pixel_width / cluster.width as f32
-                } else {
-                    cell_width
-                };
-                let item_start_pixel = params.left_pixel_x + item.x_pos + cells_before * per_cell;
-                let item_end_pixel = item_start_pixel + cells_inter * per_cell;
-                start = start.min(item_start_pixel);
-                end = end.max(item_end_pixel);
+                if cluster.width == 0 {
+                    return params.left_pixel_x + item.x_pos;
+                }
+
+                let cells_before = (cell_idx - start) as f32;
+                let per_cell = item.pixel_width / cluster.width as f32;
+                return params.left_pixel_x + item.x_pos + cells_before * per_cell;
             }
 
-            if start.is_finite() && end > start {
-                cursor_range_pixels = start..end;
+            params.left_pixel_x + cell_idx as f32 * cell_width
+        };
+
+        let cursor_range_pixels = if cursor_range.is_empty() {
+            0.0..0.0
+        } else if !params.use_pixel_positioning {
+            params.left_pixel_x + cursor_range.start as f32 * cell_width
+                ..params.left_pixel_x + cursor_range.end as f32 * cell_width
+        } else {
+            let start = cell_boundary_pixel(cursor_range.start);
+            let end = cell_boundary_pixel(cursor_range.end);
+            if start <= end {
+                start..end
             } else {
-                cursor_range_pixels = 0.0..0.0;
+                end..start
             }
-        }
+        };
 
         let bounding_rect = euclid::rect(
             params.left_pixel_x,
@@ -204,17 +221,6 @@ impl crate::TermWindow {
             params.pixel_width,
             cell_height,
         );
-
-        fn phys(x: usize, num_cols: usize, direction: Direction) -> usize {
-            match direction {
-                Direction::LeftToRight => x,
-                // Map logical cell index to physical cell index for RTL.
-                // The last column index is `num_cols - 1`, so subtract one
-                // to avoid off-by-one placement that stacks glyphs at the
-                // wrong edge of the line.
-                Direction::RightToLeft => (num_cols - 1).saturating_sub(x),
-            }
-        }
 
         if params.dims.reverse_video {
             let mut quad = self
@@ -279,7 +285,13 @@ impl crate::TermWindow {
                     + if params.use_pixel_positioning {
                         item.x_pos
                     } else {
-                        phys(cluster.first_cell_idx, num_cols, direction) as f32 * cell_width
+                        cluster_left_cell(
+                            cluster.first_cell_idx,
+                            cluster_width as usize,
+                            num_cols,
+                            direction,
+                        ) as f32
+                            * cell_width
                     };
 
                 let mut width = if params.use_pixel_positioning {
@@ -391,41 +403,10 @@ impl crate::TermWindow {
                 cursor_border_color: params.cursor_border_color,
                 pane: params.pane,
             });
-            // Compute cursor position in pixels. If we are using pixel
-            // positioning, use the shaped clusters to get the exact pixel
-            // offset for the cursor; otherwise, anchor to the physical
-            // cell boundaries.
             let pos_x = if params.use_pixel_positioning {
-                // Find the shaped item that contains the cursor.x position
-                // and compute the pixel offset within it.
-                let mut found = None;
-                for item in shaped.iter() {
-                    let cluster = &item.cluster;
-                    let start = cluster.first_cell_idx;
-                    let end = start + cluster.width as usize;
-                    if params.cursor.x >= start && params.cursor.x < end {
-                        let cells_before = (params.cursor.x - start) as f32;
-                        let per_cell = if cluster.width > 0 {
-                            item.pixel_width / cluster.width as f32
-                        } else {
-                            cell_width
-                        };
-                        found = Some(params.left_pixel_x + item.x_pos + cells_before * per_cell);
-                        break;
-                    }
-                }
-                // The positioned value above is relative to the viewport's
-                // left (i.e., does not include the GL origin offset `gl_x`),
-                // whereas earlier code included `gl_x` for cursor drawing.
-                // Preserve the same convention by adding `gl_x` here so the
-                // cursor quad will be positioned consistently with glyphs.
-                let gl_x = self.dimensions.pixel_width as f32 / -2.;
-                gl_x + found.unwrap_or_else(|| {
-                    params.left_pixel_x + (phys(params.cursor.x, num_cols, direction) as f32 * cell_width)
-                })
+                gl_x + cell_boundary_pixel(params.cursor.x)
             } else {
-                (self.dimensions.pixel_width as f32 / -2.)
-                    + params.left_pixel_x
+                gl_x + params.left_pixel_x
                     + (phys(params.cursor.x, num_cols, direction) as f32 * cell_width)
             };
 
@@ -477,12 +458,12 @@ impl crate::TermWindow {
                 }
 
                 if draw_basic {
-                    quad.set_position(
-                        pos_x,
-                        pos_y,
-                        pos_x + (cursor_range.end - cursor_range.start) as f32 * cell_width,
-                        pos_y + cell_height,
-                    );
+                    let cursor_right = if params.use_pixel_positioning {
+                        gl_x + cursor_range_pixels.end
+                    } else {
+                        pos_x + (cursor_range.end - cursor_range.start) as f32 * cell_width
+                    };
+                    quad.set_position(pos_x, pos_y, cursor_right, pos_y + cell_height);
                     quad.set_texture(
                         gl_state
                             .glyph_cache
@@ -505,11 +486,6 @@ impl crate::TermWindow {
 
         // Number of cells we've rendered, starting from the edge of the line
         let mut visual_cell_idx = 0;
-
-        let mut cluster_x_pos = match direction {
-            Direction::LeftToRight => 0.,
-            Direction::RightToLeft => params.pixel_width,
-        };
 
         for item in shaped.iter() {
             let cluster = &item.cluster;
@@ -536,32 +512,18 @@ impl crate::TermWindow {
                 cluster.width as f32 * cell_width
             };
 
-            let cluster_left = params.left_pixel_x + if params.use_pixel_positioning {
-                item.x_pos
-            } else {
-                phys(cluster.first_cell_idx, num_cols, direction) as f32 * cell_width
-            };
-
-            // Diagnostic logging for mirrored RTL clusters. Keep this gated
-            // behind the config flag so it's only active during testing.
-            if params.config.mirror_rtl_runs && cluster.direction == Direction::RightToLeft {
-                log::debug!(
-                    "mirror_debug: cluster first_cell={} width={} pixel_width={} x_pos={} cluster_left={} use_pixel_positioning={}",
-                    cluster.first_cell_idx,
-                    cluster.width,
-                    cluster_pixel_width,
-                    item.x_pos,
-                    cluster_left,
-                    params.use_pixel_positioning
-                );
-            }
-
-            // Pre-decrement by the cluster width when doing RTL,
-            // so that we can render it right-justified (this maintains
-            // the existing cluster_x_pos progression for non-pixel positioning)
-            if direction == Direction::RightToLeft && !params.use_pixel_positioning {
-                cluster_x_pos -= cluster_pixel_width;
-            }
+            let cluster_left = params.left_pixel_x
+                + if params.use_pixel_positioning {
+                    item.x_pos
+                } else {
+                    cluster_left_cell(
+                        cluster.first_cell_idx,
+                        cluster.width as usize,
+                        num_cols,
+                        direction,
+                    ) as f32
+                        * cell_width
+                };
 
             // We'll compute per-glyph local offsets relative to cluster_left.
             // This allows us to mirror the entire run as a chunk by computing
@@ -573,7 +535,10 @@ impl crate::TermWindow {
                 let glyph = &info.glyph;
 
                 if params.use_pixel_positioning
-                    && params.left_pixel_x + cluster_left + glyph_local_cursor + glyph.x_advance.get() as f32
+                    && params.left_pixel_x
+                        + cluster_left
+                        + glyph_local_cursor
+                        + glyph.x_advance.get() as f32
                         >= params.left_pixel_x + params.pixel_width
                 {
                     break;
@@ -621,47 +586,32 @@ impl crate::TermWindow {
                         }
                     }
 
-                if let Some(texture) = texture {
+                    if let Some(texture) = texture {
                         // TODO: clipping, but we can do that based on pixels
 
-                        // local offset relative to cluster
-                        let local_pos = if params.use_pixel_positioning {
-                            glyph_local_cursor + (glyph.x_offset + glyph.bearing_x).get() as f32
-                        } else {
-                            glyph_local_cursor
-                        };
-
-                        // compute glyph pixel width for mirroring calculations
-                        let glyph_pixel_width = if params.use_pixel_positioning {
+                        let glyph_advance = if params.use_pixel_positioning {
                             glyph.x_advance.get() as f32 * width_scale
                         } else {
                             info.pos.num_cells as f32 * cell_width
                         };
 
-                        // Determine final global pos_x: either normal or mirrored inside cluster
-                        let mut pos_x = if params.config.mirror_rtl_runs && cluster.direction == Direction::RightToLeft {
-                            // mirrored local left edge
-                            let mirrored_local_left = cluster_pixel_width - (local_pos + glyph_pixel_width);
+                        let mirrored_rtl = params.config.mirror_rtl_runs
+                            && cluster.direction == Direction::RightToLeft;
+
+                        let glyph_left = if mirrored_rtl {
+                            let mirrored_local_left =
+                                cluster_pixel_width - (glyph_local_cursor + glyph_advance);
                             cluster_left + mirrored_local_left
                         } else {
-                            cluster_left + local_pos
+                            cluster_left + glyph_local_cursor
                         };
 
-                        if params.config.mirror_rtl_runs && cluster.direction == Direction::RightToLeft {
-                            log::debug!(
-                                "mirror_debug: glyph pos: num_cells={} x_advance={} texture_w={} local_pos={} glyph_pixel_width={} mirrored_pos_x={} cluster_left={}",
-                                info.pos.num_cells,
-                                glyph.x_advance.get(),
-                                texture.coords.size.width,
-                                local_pos,
-                                glyph_pixel_width,
-                                pos_x,
-                                cluster_left
+                        if glyph_left > params.pixel_width + params.left_pixel_x {
+                            log::trace!(
+                                "breaking on overflow {} > {}",
+                                glyph_left,
+                                params.pixel_width + params.left_pixel_x
                             );
-                        }
-
-                        if pos_x > params.pixel_width + params.left_pixel_x {
-                            log::trace!("breaking on overflow {} > {}", pos_x, params.pixel_width + params.left_pixel_x);
                             break;
                         }
 
@@ -721,11 +671,6 @@ impl crate::TermWindow {
                             (left, i, right)
                         }
 
-                        // For pixel positioning, the shaper provides fine-grained
-                        // x_offset/bearing values that affect placement. For the
-                        // non-pixel path we position glyph bitmaps relative to
-                        // their allocated cells, so treat the adjust as zero to
-                        // avoid introducing extra gaps.
                         let adjust_raw = if params.use_pixel_positioning {
                             (glyph.x_offset + glyph.bearing_x).get() as f32
                         } else {
@@ -737,21 +682,21 @@ impl crate::TermWindow {
                         // horizontally. That means the position within the glyph's
                         // allocated pixel advance where the bitmap is drawn must
                         // also be mirrored. Compute a texture_offset relative to
-                        // pos_x that accounts for the flipped placement. For the
+                        // glyph_left that accounts for the flipped placement. For the
                         // non-mirrored case this is just the usual adjust (bearing).
-                        let texture_offset = if params.config.mirror_rtl_runs
-                            && cluster.direction == Direction::RightToLeft
-                        {
-                            // place the (flipped) bitmap so that it occupies the
-                            // same visual area within the glyph advance as before
-                            // mirroring.
-                            glyph_pixel_width - (adjust_raw + texture_pixel_width)
+                        let texture_offset = if params.use_pixel_positioning {
+                            if mirrored_rtl {
+                                (glyph_advance - (adjust_raw + texture_pixel_width))
+                                    .clamp(0.0, (glyph_advance - texture_pixel_width).max(0.0))
+                            } else {
+                                adjust_raw
+                            }
                         } else {
-                            adjust_raw
+                            0.0
                         };
 
-                        let texture_range = pos_x + texture_offset
-                            ..pos_x + texture_offset + texture_pixel_width;
+                        let texture_range = glyph_left + texture_offset
+                            ..glyph_left + texture_offset + texture_pixel_width;
 
                         // First bucket the ranges according to cursor position
                         let (left, mid, right) = range3(&texture_range, &cursor_range_pixels);
@@ -797,13 +742,13 @@ impl crate::TermWindow {
                                 continue;
                             }
 
-                             let pixel_rect = euclid::rect(
-                                 texture.coords.origin.x
-                                     + (range.start - (pos_x + texture_offset)) as isize,
-                                 texture.coords.origin.y,
-                                 ((range.end - range.start) / width_scale) as isize,
-                                 texture.coords.size.height,
-                             );
+                            let pixel_rect = euclid::rect(
+                                texture.coords.origin.x
+                                    + (range.start - (glyph_left + texture_offset)) as isize,
+                                texture.coords.origin.y,
+                                ((range.end - range.start) / width_scale) as isize,
+                                texture.coords.size.height,
+                            );
 
                             let texture_rect = texture.texture.to_texture_coords(pixel_rect);
 
@@ -817,7 +762,7 @@ impl crate::TermWindow {
                             quad.set_fg_color(glyph_color);
                             quad.set_alt_color_and_mix_value(fg_color_alt, fg_color_mix);
                             // If mirroring the cluster, flip the texture coords horizontally.
-                            if params.config.mirror_rtl_runs && cluster.direction == Direction::RightToLeft {
+                            if mirrored_rtl {
                                 let u1 = texture_rect.min_x();
                                 let u2 = texture_rect.max_x();
                                 let v1 = texture_rect.min_y();
@@ -854,30 +799,12 @@ impl crate::TermWindow {
                 phys_cell_idx += info.pos.num_cells as usize;
                 visual_cell_idx += info.pos.num_cells as usize;
 
-                // Advance both the cluster visual cursor and the local pixel
-                // cursor used for positioning glyphs when pixel positioning
-                // is enabled.  Failing to advance glyph_local_cursor caused
-                // every glyph to be drawn at the same local offset which
-                // produced the stacking behaviour.
                 let advance = if params.use_pixel_positioning {
                     glyph.x_advance.get() as f32 * width_scale
                 } else {
                     info.pos.num_cells as f32 * cell_width
                 };
-                cluster_x_pos += advance;
                 glyph_local_cursor += advance;
-            }
-
-            match direction {
-                Direction::RightToLeft => {
-                    // And decrement it again
-                    cluster_x_pos -= if params.use_pixel_positioning {
-                        item.pixel_width * width_scale
-                    } else {
-                        cluster.width as f32 * cell_width
-                    };
-                }
-                Direction::LeftToRight => {}
             }
         }
 
