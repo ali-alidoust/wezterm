@@ -110,8 +110,11 @@ impl crate::TermWindow {
             0..0
         };
 
-        let cursor_range_pixels = params.left_pixel_x + cursor_range.start as f32 * cell_width
-            ..params.left_pixel_x + cursor_range.end as f32 * cell_width;
+        // cursor_range_pixels will be computed after we have shaped the line,
+        // because when pixel positioning is enabled we need the shaper's
+        // per-cluster pixel positions to compute an accurate pixel range for
+        // the cursor. We'll set it after shaping.
+        let mut cursor_range_pixels: Range<f32> = 0.0..0.0;
 
         let mut shaped = None;
         let mut invalidate_on_hover_change = false;
@@ -154,6 +157,46 @@ impl crate::TermWindow {
             invalidate_on_hover_change = invalidate_on_hover;
             shaped
         };
+
+        // Recompute cursor_range_pixels now that we have the shaped clusters.
+        if cursor_range.is_empty() {
+            cursor_range_pixels = 0.0..0.0;
+        } else if !params.use_pixel_positioning {
+            cursor_range_pixels = params.left_pixel_x + cursor_range.start as f32 * cell_width
+                ..params.left_pixel_x + cursor_range.end as f32 * cell_width;
+        } else {
+            // Use shaped cluster pixel positions to compute the cursor range.
+            let mut start = std::f32::INFINITY;
+            let mut end = std::f32::NEG_INFINITY;
+            for item in shaped.iter() {
+                let cluster = &item.cluster;
+                let cluster_start = cluster.first_cell_idx;
+                let cluster_end = cluster_start + cluster.width as usize;
+                let inter_start = cursor_range.start.max(cluster_start);
+                let inter_end = cursor_range.end.min(cluster_end);
+                if inter_end <= inter_start {
+                    continue;
+                }
+
+                let cells_before = (inter_start - cluster_start) as f32;
+                let cells_inter = (inter_end - inter_start) as f32;
+                let per_cell = if cluster.width > 0 {
+                    item.pixel_width / cluster.width as f32
+                } else {
+                    cell_width
+                };
+                let item_start_pixel = params.left_pixel_x + item.x_pos + cells_before * per_cell;
+                let item_end_pixel = item_start_pixel + cells_inter * per_cell;
+                start = start.min(item_start_pixel);
+                end = end.max(item_end_pixel);
+            }
+
+            if start.is_finite() && end > start {
+                cursor_range_pixels = start..end;
+            } else {
+                cursor_range_pixels = 0.0..0.0;
+            }
+        }
 
         let bounding_rect = euclid::rect(
             params.left_pixel_x,
@@ -348,9 +391,38 @@ impl crate::TermWindow {
                 cursor_border_color: params.cursor_border_color,
                 pane: params.pane,
             });
-            let pos_x = (self.dimensions.pixel_width as f32 / -2.)
-                + params.left_pixel_x
-                + (phys(params.cursor.x, num_cols, direction) as f32 * cell_width);
+            // Compute cursor position in pixels. If we are using pixel
+            // positioning, use the shaped clusters to get the exact pixel
+            // offset for the cursor; otherwise, anchor to the physical
+            // cell boundaries.
+            let pos_x = if params.use_pixel_positioning {
+                // Find the shaped item that contains the cursor.x position
+                // and compute the pixel offset within it.
+                let mut found = None;
+                for item in shaped.iter() {
+                    let cluster = &item.cluster;
+                    let start = cluster.first_cell_idx;
+                    let end = start + cluster.width as usize;
+                    if params.cursor.x >= start && params.cursor.x < end {
+                        let cells_before = (params.cursor.x - start) as f32;
+                        let per_cell = if cluster.width > 0 {
+                            item.pixel_width / cluster.width as f32
+                        } else {
+                            cell_width
+                        };
+                        found = Some(params.left_pixel_x + item.x_pos + cells_before * per_cell);
+                        break;
+                    }
+                }
+                found.unwrap_or_else(|| {
+                    (self.dimensions.pixel_width as f32 / -2.) + params.left_pixel_x
+                        + (phys(params.cursor.x, num_cols, direction) as f32 * cell_width)
+                })
+            } else {
+                (self.dimensions.pixel_width as f32 / -2.)
+                    + params.left_pixel_x
+                    + (phys(params.cursor.x, num_cols, direction) as f32 * cell_width)
+            };
 
             if let Some(shape) = cursor_shape {
                 let cursor_layer = match shape {
