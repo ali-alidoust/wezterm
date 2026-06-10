@@ -720,11 +720,19 @@ impl crate::TermWindow {
                 }
                 phys_cell_idx += info.pos.num_cells as usize;
                 visual_cell_idx += info.pos.num_cells as usize;
-                cluster_x_pos += if params.use_pixel_positioning {
+
+                // Advance both the cluster visual cursor and the local pixel
+                // cursor used for positioning glyphs when pixel positioning
+                // is enabled.  Failing to advance glyph_local_cursor caused
+                // every glyph to be drawn at the same local offset which
+                // produced the stacking behaviour.
+                let advance = if params.use_pixel_positioning {
                     glyph.x_advance.get() as f32 * width_scale
                 } else {
                     info.pos.num_cells as f32 * cell_width
                 };
+                cluster_x_pos += advance;
+                glyph_local_cursor += advance;
             }
 
             match direction {
