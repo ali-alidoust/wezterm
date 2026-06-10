@@ -721,7 +721,16 @@ impl crate::TermWindow {
                             (left, i, right)
                         }
 
-                        let adjust_raw = (glyph.x_offset + glyph.bearing_x).get() as f32;
+                        // For pixel positioning, the shaper provides fine-grained
+                        // x_offset/bearing values that affect placement. For the
+                        // non-pixel path we position glyph bitmaps relative to
+                        // their allocated cells, so treat the adjust as zero to
+                        // avoid introducing extra gaps.
+                        let adjust_raw = if params.use_pixel_positioning {
+                            (glyph.x_offset + glyph.bearing_x).get() as f32
+                        } else {
+                            0.0
+                        };
                         let texture_pixel_width = texture.coords.size.width as f32 * width_scale;
 
                         // When mirroring an RTL cluster we flip the texture coords
