@@ -617,9 +617,28 @@ impl crate::TermWindow {
                             (left, i, right)
                         }
 
-                        let adjust = (glyph.x_offset + glyph.bearing_x).get() as f32;
-                        let texture_range = pos_x + adjust
-                            ..pos_x + adjust + (texture.coords.size.width as f32 * width_scale);
+                        let adjust_raw = (glyph.x_offset + glyph.bearing_x).get() as f32;
+                        let texture_pixel_width = texture.coords.size.width as f32 * width_scale;
+
+                        // When mirroring an RTL cluster we flip the texture coords
+                        // horizontally. That means the position within the glyph's
+                        // allocated pixel advance where the bitmap is drawn must
+                        // also be mirrored. Compute a texture_offset relative to
+                        // pos_x that accounts for the flipped placement. For the
+                        // non-mirrored case this is just the usual adjust (bearing).
+                        let texture_offset = if params.config.mirror_rtl_runs
+                            && cluster.direction == Direction::RightToLeft
+                        {
+                            // place the (flipped) bitmap so that it occupies the
+                            // same visual area within the glyph advance as before
+                            // mirroring.
+                            glyph_pixel_width - (adjust_raw + texture_pixel_width)
+                        } else {
+                            adjust_raw
+                        };
+
+                        let texture_range = pos_x + texture_offset
+                            ..pos_x + texture_offset + texture_pixel_width;
 
                         // First bucket the ranges according to cursor position
                         let (left, mid, right) = range3(&texture_range, &cursor_range_pixels);
@@ -665,12 +684,13 @@ impl crate::TermWindow {
                                 continue;
                             }
 
-                            let pixel_rect = euclid::rect(
-                                texture.coords.origin.x + (range.start - (pos_x + adjust)) as isize,
-                                texture.coords.origin.y,
-                                ((range.end - range.start) / width_scale) as isize,
-                                texture.coords.size.height,
-                            );
+                             let pixel_rect = euclid::rect(
+                                 texture.coords.origin.x
+                                     + (range.start - (pos_x + texture_offset)) as isize,
+                                 texture.coords.origin.y,
+                                 ((range.end - range.start) / width_scale) as isize,
+                                 texture.coords.size.height,
+                             );
 
                             let texture_rect = texture.texture.to_texture_coords(pixel_rect);
 
