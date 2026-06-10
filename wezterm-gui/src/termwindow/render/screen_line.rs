@@ -639,23 +639,9 @@ impl crate::TermWindow {
                         };
 
                         // Determine final global pos_x: either normal or mirrored inside cluster
-                        // Special-case: in the non-pixel-positioning path, if the
-                        // cluster occupies a single cell (common for Arabic
-                        // ligatures that are logically one cell), anchor the
-                        // glyph to the start of the cell to avoid empty cells
-                        // appearing before the ligature.
-                        let mut pos_x = if !params.use_pixel_positioning && cluster.width == 1 {
-                            cluster_left
-                        } else if params.config.mirror_rtl_runs && cluster.direction == Direction::RightToLeft {
+                        let mut pos_x = if params.config.mirror_rtl_runs && cluster.direction == Direction::RightToLeft {
                             // mirrored local left edge
-                            let mut mirrored_local_left = cluster_pixel_width - (local_pos + glyph_pixel_width);
-                            // Clamp to valid range
-                            if mirrored_local_left < 0.0 {
-                                mirrored_local_left = 0.0;
-                            }
-                            if mirrored_local_left > cluster_pixel_width - glyph_pixel_width {
-                                mirrored_local_left = cluster_pixel_width - glyph_pixel_width;
-                            }
+                            let mirrored_local_left = cluster_pixel_width - (local_pos + glyph_pixel_width);
                             cluster_left + mirrored_local_left
                         } else {
                             cluster_left + local_pos
