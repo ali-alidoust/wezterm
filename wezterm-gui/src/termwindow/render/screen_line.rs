@@ -542,6 +542,20 @@ impl crate::TermWindow {
                 phys(cluster.first_cell_idx, num_cols, direction) as f32 * cell_width
             };
 
+            // Diagnostic logging for mirrored RTL clusters. Keep this gated
+            // behind the config flag so it's only active during testing.
+            if params.config.mirror_rtl_runs && cluster.direction == Direction::RightToLeft {
+                log::debug!(
+                    "mirror_debug: cluster first_cell={} width={} pixel_width={} x_pos={} cluster_left={} use_pixel_positioning={}",
+                    cluster.first_cell_idx,
+                    cluster.width,
+                    cluster_pixel_width,
+                    item.x_pos,
+                    cluster_left,
+                    params.use_pixel_positioning
+                );
+            }
+
             // Pre-decrement by the cluster width when doing RTL,
             // so that we can render it right-justified (this maintains
             // the existing cluster_x_pos progression for non-pixel positioning)
@@ -607,7 +621,7 @@ impl crate::TermWindow {
                         }
                     }
 
-                    if let Some(texture) = texture {
+                if let Some(texture) = texture {
                         // TODO: clipping, but we can do that based on pixels
 
                         // local offset relative to cluster
@@ -632,6 +646,19 @@ impl crate::TermWindow {
                         } else {
                             cluster_left + local_pos
                         };
+
+                        if params.config.mirror_rtl_runs && cluster.direction == Direction::RightToLeft {
+                            log::debug!(
+                                "mirror_debug: glyph pos: num_cells={} x_advance={} texture_w={} local_pos={} glyph_pixel_width={} mirrored_pos_x={} cluster_left={}",
+                                info.pos.num_cells,
+                                glyph.x_advance.get(),
+                                texture.coords.size.width,
+                                local_pos,
+                                glyph_pixel_width,
+                                pos_x,
+                                cluster_left
+                            );
+                        }
 
                         if pos_x > params.pixel_width + params.left_pixel_x {
                             log::trace!("breaking on overflow {} > {}", pos_x, params.pixel_width + params.left_pixel_x);
