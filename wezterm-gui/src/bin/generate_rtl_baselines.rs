@@ -26,7 +26,10 @@ pub struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    eprintln!("Baseline generator (wezterm-gui).\nOutputs: {}", args.out_dir.display());
+    eprintln!(
+        "Baseline generator (wezterm-gui).\nOutputs: {}",
+        args.out_dir.display()
+    );
 
     std::fs::create_dir_all(&args.out_dir).context("create out_dir")?;
 
@@ -60,7 +63,8 @@ fn write_placeholders(out_dir: &std::path::Path) -> anyhow::Result<()> {
     ];
 
     for (name, (r, g, b)) in &samples {
-        let mut im: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_pixel(800, 64, Rgba([0, 0, 0, 0]));
+        let mut im: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(800, 64, Rgba([0, 0, 0, 0]));
 
         for x in 0..800 {
             for y in 16..48 {

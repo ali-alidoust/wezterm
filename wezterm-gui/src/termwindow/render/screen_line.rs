@@ -458,10 +458,17 @@ impl crate::TermWindow {
                 }
 
                 if draw_basic {
+                    let logical_cursor_width =
+                        (cursor_range.end - cursor_range.start) as f32 * cell_width;
                     let cursor_right = if params.use_pixel_positioning {
-                        gl_x + cursor_range_pixels.end
+                        match shape {
+                            CursorShape::BlinkingBar | CursorShape::SteadyBar => {
+                                pos_x + logical_cursor_width
+                            }
+                            _ => gl_x + cursor_range_pixels.end,
+                        }
                     } else {
-                        pos_x + (cursor_range.end - cursor_range.start) as f32 * cell_width
+                        pos_x + logical_cursor_width
                     };
                     quad.set_position(pos_x, pos_y, cursor_right, pos_y + cell_height);
                     quad.set_texture(
@@ -589,14 +596,21 @@ impl crate::TermWindow {
                     if let Some(texture) = texture {
                         // TODO: clipping, but we can do that based on pixels
 
+                        let mirrored_rtl = params.config.mirror_rtl_runs
+                            && cluster.direction == Direction::RightToLeft;
+
                         let glyph_advance = if params.use_pixel_positioning {
                             glyph.x_advance.get() as f32 * width_scale
+                        } else if mirrored_rtl {
+                            let shaped_advance = glyph.x_advance.get() as f32 * width_scale;
+                            if shaped_advance > 0.0 {
+                                shaped_advance
+                            } else {
+                                info.pos.num_cells as f32 * cell_width
+                            }
                         } else {
                             info.pos.num_cells as f32 * cell_width
                         };
-
-                        let mirrored_rtl = params.config.mirror_rtl_runs
-                            && cluster.direction == Direction::RightToLeft;
 
                         let glyph_left = if mirrored_rtl {
                             let mirrored_local_left =
@@ -671,11 +685,7 @@ impl crate::TermWindow {
                             (left, i, right)
                         }
 
-                        let adjust_raw = if params.use_pixel_positioning {
-                            (glyph.x_offset + glyph.bearing_x).get() as f32
-                        } else {
-                            0.0
-                        };
+                        let adjust_raw = (glyph.x_offset + glyph.bearing_x).get() as f32;
                         let texture_pixel_width = texture.coords.size.width as f32 * width_scale;
 
                         // When mirroring an RTL cluster we flip the texture coords
@@ -684,15 +694,11 @@ impl crate::TermWindow {
                         // also be mirrored. Compute a texture_offset relative to
                         // glyph_left that accounts for the flipped placement. For the
                         // non-mirrored case this is just the usual adjust (bearing).
-                        let texture_offset = if params.use_pixel_positioning {
-                            if mirrored_rtl {
-                                (glyph_advance - (adjust_raw + texture_pixel_width))
-                                    .clamp(0.0, (glyph_advance - texture_pixel_width).max(0.0))
-                            } else {
-                                adjust_raw
-                            }
+                        let texture_offset = if mirrored_rtl {
+                            (glyph_advance - (adjust_raw + texture_pixel_width))
+                                .clamp(0.0, (glyph_advance - texture_pixel_width).max(0.0))
                         } else {
-                            0.0
+                            adjust_raw.clamp(0.0, (glyph_advance - texture_pixel_width).max(0.0))
                         };
 
                         let texture_range = glyph_left + texture_offset
