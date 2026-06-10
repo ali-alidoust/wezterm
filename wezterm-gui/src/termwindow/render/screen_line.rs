@@ -414,9 +414,14 @@ impl crate::TermWindow {
                         break;
                     }
                 }
-                found.unwrap_or_else(|| {
-                    (self.dimensions.pixel_width as f32 / -2.) + params.left_pixel_x
-                        + (phys(params.cursor.x, num_cols, direction) as f32 * cell_width)
+                // The positioned value above is relative to the viewport's
+                // left (i.e., does not include the GL origin offset `gl_x`),
+                // whereas earlier code included `gl_x` for cursor drawing.
+                // Preserve the same convention by adding `gl_x` here so the
+                // cursor quad will be positioned consistently with glyphs.
+                let gl_x = self.dimensions.pixel_width as f32 / -2.;
+                gl_x + found.unwrap_or_else(|| {
+                    params.left_pixel_x + (phys(params.cursor.x, num_cols, direction) as f32 * cell_width)
                 })
             } else {
                 (self.dimensions.pixel_width as f32 / -2.)
