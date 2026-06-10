@@ -355,6 +355,11 @@ pub struct Config {
     #[dynamic(default)]
     pub webgpu_preferred_adapter: Option<GpuInfo>,
 
+    /// When true, render right-to-left runs as mirrored chunks (flip
+    /// both glyph placement and glyph bitmaps).  Disabled by default.
+    #[dynamic(default = "default_false")]
+    pub mirror_rtl_runs: bool,
+
     #[dynamic(default)]
     pub wsl_domains: Option<Vec<WslDomain>>,
 

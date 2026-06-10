@@ -448,21 +448,37 @@ impl crate::TermWindow {
             #[allow(unused_variables)]
             let mut phys_cell_idx = cluster.first_cell_idx;
 
+            // Compute cluster pixel left and width
+            let cluster_pixel_width = if params.use_pixel_positioning {
+                item.pixel_width
+            } else {
+                cluster.width as f32 * cell_width
+            };
+
+            let cluster_left = params.left_pixel_x + if params.use_pixel_positioning {
+                item.x_pos
+            } else {
+                phys(cluster.first_cell_idx, num_cols, direction) as f32 * cell_width
+            };
+
             // Pre-decrement by the cluster width when doing RTL,
-            // so that we can render it right-justified
-            if direction == Direction::RightToLeft {
-                cluster_x_pos -= if params.use_pixel_positioning {
-                    item.pixel_width
-                } else {
-                    cluster.width as f32 * cell_width
-                };
+            // so that we can render it right-justified (this maintains
+            // the existing cluster_x_pos progression for non-pixel positioning)
+            if direction == Direction::RightToLeft && !params.use_pixel_positioning {
+                cluster_x_pos -= cluster_pixel_width;
             }
+
+            // We'll compute per-glyph local offsets relative to cluster_left.
+            // This allows us to mirror the entire run as a chunk by computing
+            // mirrored_local = cluster_pixel_width - (local + glyph_width).
+            // Note: we do NOT change glyph iteration order so shaping is preserved.
+            let mut glyph_local_cursor = 0f32;
 
             for info in glyph_info.iter() {
                 let glyph = &info.glyph;
 
                 if params.use_pixel_positioning
-                    && params.left_pixel_x + cluster_x_pos + glyph.x_advance.get() as f32
+                    && params.left_pixel_x + cluster_left + glyph_local_cursor + glyph.x_advance.get() as f32
                         >= params.left_pixel_x + params.pixel_width
                 {
                     break;
@@ -513,18 +529,33 @@ impl crate::TermWindow {
                     if let Some(texture) = texture {
                         // TODO: clipping, but we can do that based on pixels
 
-                        let pos_x = cluster_x_pos
-                            + if params.use_pixel_positioning {
-                                (glyph.x_offset + glyph.bearing_x).get() as f32
-                            } else {
-                                0.
-                            };
+                        // local offset relative to cluster
+                        let local_pos = if params.use_pixel_positioning {
+                            glyph_local_cursor + (glyph.x_offset + glyph.bearing_x).get() as f32
+                        } else {
+                            glyph_local_cursor
+                        };
 
-                        if pos_x > params.pixel_width {
-                            log::trace!("breaking on overflow {} > {}", pos_x, params.pixel_width);
+                        // compute glyph pixel width for mirroring calculations
+                        let glyph_pixel_width = if params.use_pixel_positioning {
+                            glyph.x_advance.get() as f32 * width_scale
+                        } else {
+                            info.pos.num_cells as f32 * cell_width
+                        };
+
+                        // Determine final global pos_x: either normal or mirrored inside cluster
+                        let mut pos_x = if params.config.mirror_rtl_runs && cluster.direction == Direction::RightToLeft {
+                            // mirrored local left edge
+                            let mirrored_local_left = cluster_pixel_width - (local_pos + glyph_pixel_width);
+                            cluster_left + mirrored_local_left
+                        } else {
+                            cluster_left + local_pos
+                        };
+
+                        if pos_x > params.pixel_width + params.left_pixel_x {
+                            log::trace!("breaking on overflow {} > {}", pos_x, params.pixel_width + params.left_pixel_x);
                             break;
                         }
-                        let pos_x = pos_x + params.left_pixel_x;
 
                         // We need to conceptually slice this texture into
                         // up into strips that consider the cursor and selection
@@ -648,7 +679,16 @@ impl crate::TermWindow {
                             );
                             quad.set_fg_color(glyph_color);
                             quad.set_alt_color_and_mix_value(fg_color_alt, fg_color_mix);
-                            quad.set_texture(texture_rect);
+                            // If mirroring the cluster, flip the texture coords horizontally.
+                            if params.config.mirror_rtl_runs && cluster.direction == Direction::RightToLeft {
+                                let u1 = texture_rect.min_x();
+                                let u2 = texture_rect.max_x();
+                                let v1 = texture_rect.min_y();
+                                let v2 = texture_rect.max_y();
+                                quad.set_texture_discrete(u2, u1, v1, v2);
+                            } else {
+                                quad.set_texture(texture_rect);
+                            }
                             quad.set_hsv(if glyph.brightness_adjust != 1.0 {
                                 let hsv = hsv.unwrap_or_else(|| HsbTransform::default());
                                 Some(HsbTransform {
