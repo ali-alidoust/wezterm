@@ -37,10 +37,16 @@ struct Info {
 fn get_only_char(s: &str) -> Option<char> {
     let mut chars = s.chars();
     let first_char = chars.next()?;
-    if chars.next().is_some() {
-        None
-    } else {
+    if chars.next().is_none() {
         Some(first_char)
+    } else {
+        let mut visible = s.chars().filter(|c| *c != '\u{200c}' && *c != '\u{200d}');
+        let first_visible = visible.next()?;
+        if visible.next().is_none() {
+            Some(first_visible)
+        } else {
+            None
+        }
     }
 }
 
