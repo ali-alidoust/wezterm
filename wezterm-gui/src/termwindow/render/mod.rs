@@ -35,10 +35,6 @@ use wezterm_term::color::{ColorAttribute, ColorPalette};
 use wezterm_term::{CellAttributes, Line, StableRowIndex};
 use window::color::LinearRgba;
 
-fn should_disable_bidi_mirroring(text: &str) -> bool {
-    text.chars().any(|c| matches!(c, '(' | ')' | '[' | ']' | '{' | '}'))
-}
-
 pub mod borders;
 pub mod corners;
 pub mod draw;
@@ -801,13 +797,11 @@ impl crate::TermWindow {
         let shape_resolve_start = Instant::now();
         let disable_bidi_mirroring = direction == Direction::RightToLeft
             && self.config.mirror_rtl_runs
-            && !self.config.bidi_enabled
-            && should_disable_bidi_mirroring(&cluster.text);
+            && !self.config.bidi_enabled;
         let key = BorrowedShapeCacheKey {
             style,
             text: &cluster.text,
             shape_rtl: direction == Direction::RightToLeft,
-            disable_bidi_mirroring,
         };
         let glyph_info = match self.lookup_cached_shape(&key) {
             Some(Ok(info)) => info,
@@ -829,34 +823,12 @@ impl crate::TermWindow {
                     direction,
                     None, // FIXME: need more paragraph context
                     Some(&presentation_width),
+                    disable_bidi_mirroring,
                 ) {
                     Ok(info) => {
                         let mut info = info;
                         if direction == Direction::RightToLeft {
                             info.reverse();
-
-                            if disable_bidi_mirroring {
-                                for glyph_info in &mut info {
-                                    if let Some(c) = glyph_info.only_char {
-                                        if matches!(c, '(' | ')' | '[' | ']' | '{' | '}') {
-                                            if let Ok(ltr_info) = font.shape(
-                                                &c.to_string(),
-                                                || {},
-                                                |_| {},
-                                                Some(cluster.presentation),
-                                                Direction::LeftToRight,
-                                                None,
-                                                None,
-                                            ) {
-                                                if let Some(first) = ltr_info.into_iter().next() {
-                                                    glyph_info.glyph_pos = first.glyph_pos;
-                                                    glyph_info.font_idx = first.font_idx;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
                         }
 
                         let glyphs = self.glyph_infos_to_glyphs(

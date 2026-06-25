@@ -10,7 +10,6 @@ pub struct ShapeCacheKey {
     pub style: TextStyle,
     pub text: String,
     pub shape_rtl: bool,
-    pub disable_bidi_mirroring: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -67,7 +66,6 @@ pub struct BorrowedShapeCacheKey<'a> {
     pub style: &'a TextStyle,
     pub text: &'a str,
     pub shape_rtl: bool,
-    pub disable_bidi_mirroring: bool,
 }
 
 impl<'a> BorrowedShapeCacheKey<'a> {
@@ -76,7 +74,6 @@ impl<'a> BorrowedShapeCacheKey<'a> {
             style: self.style.clone(),
             text: self.text.to_owned(),
             shape_rtl: self.shape_rtl,
-            disable_bidi_mirroring: self.disable_bidi_mirroring,
         }
     }
 }
@@ -91,7 +88,6 @@ impl ShapeCacheKeyTrait for ShapeCacheKey {
             style: &self.style,
             text: &self.text,
             shape_rtl: self.shape_rtl,
-            disable_bidi_mirroring: self.disable_bidi_mirroring,
         }
     }
 }
@@ -158,6 +154,7 @@ mod test {
                     Direction::LeftToRight,
                     None,
                     Some(&presentation_width),
+                    false,
                 )
                 .unwrap();
             let mut glyphs = infos
@@ -305,6 +302,7 @@ mod test {
                             Direction::LeftToRight,
                             None,
                             Some(&presentation_width),
+                            false,
                         )
                         .unwrap();
                     // println!("{:?}", &x[0..2]);

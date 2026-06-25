@@ -125,6 +125,7 @@ pub trait FontShaper {
         direction: Direction,
         range: Option<Range<usize>>,
         presentation_width: Option<&PresentationWidth>,
+        disable_bidi_mirroring: bool,
     ) -> anyhow::Result<Vec<GlyphInfo>>;
 
     /// Compute the font metrics for the preferred font

@@ -125,6 +125,7 @@ impl LoadedFont {
         direction: Direction,
         range: Option<Range<usize>>,
         presentation_width: Option<&PresentationWidth>,
+        disable_bidi_mirroring: bool,
     ) -> anyhow::Result<Vec<GlyphInfo>> {
         loop {
             let (tx, rx) = channel();
@@ -139,6 +140,7 @@ impl LoadedFont {
                 direction,
                 range.clone(),
                 presentation_width,
+                disable_bidi_mirroring,
             ) {
                 Ok(tuple) => tuple,
                 Err(err) if err.downcast_ref::<ClearShapeCache>().is_some() => {
@@ -165,6 +167,7 @@ impl LoadedFont {
         direction: Direction,
         range: Option<Range<usize>>,
         presentation_width: Option<&PresentationWidth>,
+        disable_bidi_mirroring: bool,
     ) -> anyhow::Result<Vec<GlyphInfo>> {
         let (_async_resolve, res) = self.shape_impl(
             text,
@@ -174,6 +177,7 @@ impl LoadedFont {
             direction,
             range,
             presentation_width,
+            disable_bidi_mirroring,
         )?;
         Ok(res)
     }
@@ -187,6 +191,7 @@ impl LoadedFont {
         direction: Direction,
         range: Option<Range<usize>>,
         presentation_width: Option<&PresentationWidth>,
+        disable_bidi_mirroring: bool,
     ) -> anyhow::Result<(bool, Vec<GlyphInfo>)> {
         let mut no_glyphs = vec![];
 
@@ -212,6 +217,7 @@ impl LoadedFont {
             direction,
             range,
             presentation_width,
+            disable_bidi_mirroring,
         );
 
         no_glyphs.retain(|&c| c != '\u{FE0F}' && c != '\u{FE0E}');
