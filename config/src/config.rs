@@ -355,8 +355,10 @@ pub struct Config {
     #[dynamic(default)]
     pub webgpu_preferred_adapter: Option<GpuInfo>,
 
-    /// When true, render right-to-left runs as mirrored chunks (flip
-    /// both glyph placement and glyph bitmaps).  Disabled by default.
+    /// When true and bidi is disabled, strong RTL clusters are shaped
+    /// as RTL while preserving logical left-to-right ordering, and
+    /// individual strong RTL glyph bitmaps are mirrored.
+    /// Disabled by default.
     #[dynamic(default = "default_false")]
     pub mirror_rtl_runs: bool,
 

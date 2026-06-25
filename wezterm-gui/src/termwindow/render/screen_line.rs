@@ -14,7 +14,7 @@ use std::time::Instant;
 use termwiz::cell::{unicode_column_width, Blink};
 use termwiz::color::LinearRgba;
 use termwiz::surface::CursorShape;
-use wezterm_bidi::Direction;
+use wezterm_bidi::{bidi_class_for_char, BidiClass, Direction};
 use wezterm_term::color::ColorAttribute;
 use wezterm_term::CellAttributes;
 
@@ -88,7 +88,7 @@ impl crate::TermWindow {
 
         let mut composition_width = 0;
 
-        let (_bidi_enabled, bidi_direction) = params.line.bidi_info();
+        let (bidi_enabled, bidi_direction) = params.line.bidi_info();
         let direction = bidi_direction.direction();
 
         fn phys(x: usize, num_cols: usize, direction: Direction) -> usize {
@@ -512,13 +512,6 @@ impl crate::TermWindow {
             #[allow(unused_variables)]
             let mut phys_cell_idx = cluster.first_cell_idx;
 
-            // Compute cluster pixel left and width
-            let cluster_pixel_width = if params.use_pixel_positioning {
-                item.pixel_width
-            } else {
-                cluster.width as f32 * cell_width
-            };
-
             let cluster_left = params.left_pixel_x
                 + if params.use_pixel_positioning {
                     item.x_pos
@@ -533,9 +526,6 @@ impl crate::TermWindow {
                 };
 
             // We'll compute per-glyph local offsets relative to cluster_left.
-            // This allows us to mirror the entire run as a chunk by computing
-            // mirrored_local = cluster_pixel_width - (local + glyph_width).
-            // Note: we do NOT change glyph iteration order so shaping is preserved.
             let mut glyph_local_cursor = 0f32;
 
             for info in glyph_info.iter() {
@@ -596,29 +586,23 @@ impl crate::TermWindow {
                     if let Some(texture) = texture {
                         // TODO: clipping, but we can do that based on pixels
 
-                        let mirrored_rtl = params.config.mirror_rtl_runs
-                            && cluster.direction == Direction::RightToLeft;
+                        let mirrored_rtl_glyph = params.config.mirror_rtl_runs
+                            && !bidi_enabled
+                            && info.only_char.map_or(false, |c| {
+                                matches!(
+                                    bidi_class_for_char(c),
+                                    BidiClass::ArabicLetter | BidiClass::RightToLeft
+                                )
+                            });
+                        let mirrored_texture = mirrored_rtl_glyph;
 
                         let glyph_advance = if params.use_pixel_positioning {
                             glyph.x_advance.get() as f32 * width_scale
-                        } else if mirrored_rtl {
-                            let shaped_advance = glyph.x_advance.get() as f32 * width_scale;
-                            if shaped_advance > 0.0 {
-                                shaped_advance
-                            } else {
-                                info.pos.num_cells as f32 * cell_width
-                            }
                         } else {
                             info.pos.num_cells as f32 * cell_width
                         };
 
-                        let glyph_left = if mirrored_rtl {
-                            let mirrored_local_left =
-                                cluster_pixel_width - (glyph_local_cursor + glyph_advance);
-                            cluster_left + mirrored_local_left
-                        } else {
-                            cluster_left + glyph_local_cursor
-                        };
+                        let glyph_left = cluster_left + glyph_local_cursor;
 
                         if glyph_left > params.pixel_width + params.left_pixel_x {
                             log::trace!(
@@ -688,13 +672,12 @@ impl crate::TermWindow {
                         let adjust_raw = (glyph.x_offset + glyph.bearing_x).get() as f32;
                         let texture_pixel_width = texture.coords.size.width as f32 * width_scale;
 
-                        // When mirroring an RTL cluster we flip the texture coords
-                        // horizontally. That means the position within the glyph's
-                        // allocated pixel advance where the bitmap is drawn must
-                        // also be mirrored. Compute a texture_offset relative to
-                        // glyph_left that accounts for the flipped placement. For the
-                        // non-mirrored case this is just the usual adjust (bearing).
-                        let texture_offset = if mirrored_rtl {
+                        // When mirroring an individual RTL glyph we flip the texture
+                        // coords horizontally. Mirror the placement of the bitmap
+                        // within the glyph advance so bearings remain visually
+                        // consistent. For non-mirrored glyphs this is the usual
+                        // adjust (bearing).
+                        let texture_offset = if mirrored_texture {
                             (glyph_advance - (adjust_raw + texture_pixel_width))
                                 .clamp(0.0, (glyph_advance - texture_pixel_width).max(0.0))
                         } else {
@@ -767,8 +750,8 @@ impl crate::TermWindow {
                             );
                             quad.set_fg_color(glyph_color);
                             quad.set_alt_color_and_mix_value(fg_color_alt, fg_color_mix);
-                            // If mirroring the cluster, flip the texture coords horizontally.
-                            if mirrored_rtl {
+                            // If mirroring this glyph, flip the texture coords horizontally.
+                            if mirrored_texture {
                                 let u1 = texture_rect.min_x();
                                 let u2 = texture_rect.max_x();
                                 let v1 = texture_rect.min_y();
@@ -973,9 +956,24 @@ impl crate::TermWindow {
 
             let style_params = last_style.as_ref().expect("we just set it up").clone();
 
+            let shape_direction = if params.config.mirror_rtl_runs
+                && !bidi_enabled
+                && cluster.text.chars().any(|c| {
+                    matches!(
+                        bidi_class_for_char(c),
+                        BidiClass::ArabicLetter | BidiClass::RightToLeft
+                    )
+                })
+            {
+                Direction::RightToLeft
+            } else {
+                cluster.direction
+            };
+
             let glyph_info = self.cached_cluster_shape(
                 style_params.style,
                 &cluster,
+                shape_direction,
                 &gl_state,
                 None,
                 &self.render_metrics,
