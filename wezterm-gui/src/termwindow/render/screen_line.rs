@@ -434,7 +434,7 @@ impl crate::TermWindow {
 
         let mut cluster_x_pos = match direction {
             Direction::LeftToRight => 0.,
-            Direction::RightToLeft => params.pixel_width,
+            Direction::RightToLeft => 0.,
         };
 
         for item in shaped.iter() {
@@ -457,7 +457,7 @@ impl crate::TermWindow {
 
             // Pre-decrement by the cluster width when doing RTL,
             // so that we can render it right-justified
-            if direction == Direction::RightToLeft {
+            if direction == Direction::RightToLeft && !params.config.mirror_rtl_runs {
                 cluster_x_pos -= if params.use_pixel_positioning {
                     item.pixel_width
                 } else {
@@ -599,7 +599,11 @@ impl crate::TermWindow {
                             (left, i, right)
                         }
 
-                        let adjust = (glyph.x_offset + glyph.bearing_x).get() as f32;
+                        let adjust = if mirrored_texture {
+                            0.
+                        } else {
+                            (glyph.x_offset + glyph.bearing_x).get() as f32
+                        };
                         let texture_range = pos_x + adjust
                             ..pos_x + adjust + (texture.coords.size.width as f32 * width_scale);
 
@@ -709,16 +713,18 @@ impl crate::TermWindow {
                 };
             }
 
-            match direction {
-                Direction::RightToLeft => {
-                    // And decrement it again
-                    cluster_x_pos -= if params.use_pixel_positioning {
-                        item.pixel_width * width_scale
-                    } else {
-                        cluster.width as f32 * cell_width
-                    };
+            if !params.config.mirror_rtl_runs {
+                match direction {
+                    Direction::RightToLeft => {
+                        // And decrement it again
+                        cluster_x_pos -= if params.use_pixel_positioning {
+                            item.pixel_width * width_scale
+                        } else {
+                            cluster.width as f32 * cell_width
+                        };
+                    }
+                    Direction::LeftToRight => {}
                 }
-                Direction::LeftToRight => {}
             }
         }
 
