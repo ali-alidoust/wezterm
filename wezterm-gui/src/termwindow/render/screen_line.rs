@@ -529,7 +529,7 @@ impl crate::TermWindow {
 
                         let mirrored_rtl_glyph = params.config.mirror_rtl_runs
                             && !bidi_enabled
-                            && info.only_char.map_or(false, |c| {
+                            && cluster.text.chars().any(|c| {
                                 matches!(
                                     bidi_class_for_char(c),
                                     BidiClass::ArabicLetter | BidiClass::RightToLeft
