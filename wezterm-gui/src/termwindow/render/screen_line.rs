@@ -529,12 +529,20 @@ impl crate::TermWindow {
 
                         let mirrored_rtl_glyph = params.config.mirror_rtl_runs
                             && !bidi_enabled
-                            && cluster.text.chars().any(|c| {
-                                matches!(
-                                    bidi_class_for_char(c),
-                                    BidiClass::ArabicLetter | BidiClass::RightToLeft
-                                )
-                            });
+                            && info.only_char.map_or(
+                                cluster.text.chars().any(|c| {
+                                    matches!(
+                                        bidi_class_for_char(c),
+                                        BidiClass::ArabicLetter | BidiClass::RightToLeft
+                                    )
+                                }),
+                                |c| {
+                                    matches!(
+                                        bidi_class_for_char(c),
+                                        BidiClass::ArabicLetter | BidiClass::RightToLeft
+                                    )
+                                },
+                            );
                         let mirrored_texture = mirrored_rtl_glyph;
 
                         if pos_x > params.pixel_width {
