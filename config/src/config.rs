@@ -21,8 +21,8 @@ use crate::units::Dimension;
 use crate::unix::UnixDomain;
 use crate::wsl::WslDomain;
 use crate::{
-    default_config_with_overrides_applied, default_one_point_oh, default_one_point_oh_f64,
-    default_true, default_win32_acrylic_accent_color, CellWidth, GpuInfo,
+    default_config_with_overrides_applied, default_false, default_one_point_oh,
+    default_one_point_oh_f64, default_true, default_win32_acrylic_accent_color, CellWidth, GpuInfo,
     IntegratedTitleButtonColor, KeyMapPreference, LoadedConfig, MouseEventTriggerMods, RgbaColor,
     SerialDomain, SystemBackdrop, WebGpuPowerPreference, CONFIG_DIRS, CONFIG_FILE_OVERRIDE,
     CONFIG_OVERRIDES, CONFIG_SKIP, HOME_DIR,
@@ -354,6 +354,13 @@ pub struct Config {
 
     #[dynamic(default)]
     pub webgpu_preferred_adapter: Option<GpuInfo>,
+
+    /// When true and bidi is disabled, strong RTL clusters are shaped
+    /// as RTL while preserving logical left-to-right ordering, and
+    /// individual strong RTL glyph bitmaps are mirrored.
+    /// Disabled by default.
+    #[dynamic(default = "default_false")]
+    pub mirror_rtl_runs: bool,
 
     #[dynamic(default)]
     pub wsl_domains: Option<Vec<WslDomain>>,

@@ -27,6 +27,7 @@ use std::time::Instant;
 use termwiz::cellcluster::CellCluster;
 use termwiz::hyperlink::Hyperlink;
 use termwiz::surface::{CursorShape, CursorVisibility, SequenceNo};
+use wezterm_bidi::Direction;
 use wezterm_font::shaper::PresentationWidth;
 use wezterm_font::units::{IntPixelLength, PixelLength};
 use wezterm_font::{ClearShapeCache, GlyphInfo, LoadedFont};
@@ -405,7 +406,14 @@ impl crate::TermWindow {
         let fa_lock = "\u{f023}";
         let line = Line::from_text(fa_lock, attrs, 0, None);
         let cluster = line.cluster(None);
-        let shape_info = self.cached_cluster_shape(style, &cluster[0], gl_state, font, metrics)?;
+        let shape_info = self.cached_cluster_shape(
+            style,
+            &cluster[0],
+            cluster[0].direction,
+            gl_state,
+            font,
+            metrics,
+        )?;
         Ok(Rc::clone(&shape_info[0].glyph))
     }
 
@@ -781,14 +789,19 @@ impl crate::TermWindow {
         &self,
         style: &TextStyle,
         cluster: &CellCluster,
+        direction: Direction,
         gl_state: &RenderState,
         font: Option<&Rc<LoadedFont>>,
         metrics: &RenderMetrics,
     ) -> anyhow::Result<Rc<Vec<ShapedInfo>>> {
         let shape_resolve_start = Instant::now();
+        let disable_bidi_mirroring = direction == Direction::RightToLeft
+            && self.config.mirror_rtl_runs
+            && !self.config.bidi_enabled;
         let key = BorrowedShapeCacheKey {
             style,
             text: &cluster.text,
+            shape_rtl: direction == Direction::RightToLeft,
         };
         let glyph_info = match self.lookup_cached_shape(&key) {
             Some(Ok(info)) => info,
@@ -807,11 +820,17 @@ impl crate::TermWindow {
                     move || window.notify(TermWindowNotif::InvalidateShapeCache),
                     BlockKey::filter_out_synthetic,
                     Some(cluster.presentation),
-                    cluster.direction,
+                    direction,
                     None, // FIXME: need more paragraph context
                     Some(&presentation_width),
+                    disable_bidi_mirroring,
                 ) {
                     Ok(info) => {
+                        let mut info = info;
+                        if direction == Direction::RightToLeft {
+                            info.reverse();
+                        }
+
                         let glyphs = self.glyph_infos_to_glyphs(
                             &style,
                             &mut gl_state.glyph_cache.borrow_mut(),

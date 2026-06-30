@@ -605,6 +605,7 @@ impl super::TermWindow {
                     direction,
                     None,
                     None,
+                    false,
                 )?;
                 let mut computed_cells = vec![];
                 let mut glyph_cache = context.gl_state.glyph_cache.borrow_mut();

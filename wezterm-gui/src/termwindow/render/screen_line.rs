@@ -14,7 +14,7 @@ use std::time::Instant;
 use termwiz::cell::{unicode_column_width, Blink};
 use termwiz::color::LinearRgba;
 use termwiz::surface::CursorShape;
-use wezterm_bidi::Direction;
+use wezterm_bidi::{bidi_class_for_char, BidiClass, Direction};
 use wezterm_term::color::ColorAttribute;
 use wezterm_term::CellAttributes;
 
@@ -88,7 +88,7 @@ impl crate::TermWindow {
 
         let mut composition_width = 0;
 
-        let (_bidi_enabled, bidi_direction) = params.line.bidi_info();
+        let (bidi_enabled, bidi_direction) = params.line.bidi_info();
         let direction = bidi_direction.direction();
 
         // Do we need to shape immediately, or can we use the pre-shaped data?
@@ -396,12 +396,19 @@ impl crate::TermWindow {
                 }
 
                 if draw_basic {
-                    quad.set_position(
-                        pos_x,
-                        pos_y,
-                        pos_x + (cursor_range.end - cursor_range.start) as f32 * cell_width,
-                        pos_y + cell_height,
-                    );
+                    let logical_cursor_width =
+                        (cursor_range.end - cursor_range.start) as f32 * cell_width;
+                    let cursor_right = if params.use_pixel_positioning {
+                        match shape {
+                            CursorShape::BlinkingBar | CursorShape::SteadyBar => {
+                                pos_x + logical_cursor_width
+                            }
+                            _ => gl_x + cursor_range_pixels.end,
+                        }
+                    } else {
+                        pos_x + logical_cursor_width
+                    };
+                    quad.set_position(pos_x, pos_y, cursor_right, pos_y + cell_height);
                     quad.set_texture(
                         gl_state
                             .glyph_cache
@@ -519,6 +526,16 @@ impl crate::TermWindow {
                             } else {
                                 0.
                             };
+
+                        let mirrored_rtl_glyph = params.config.mirror_rtl_runs
+                            && !bidi_enabled
+                            && info.only_char.map_or(false, |c| {
+                                matches!(
+                                    bidi_class_for_char(c),
+                                    BidiClass::ArabicLetter | BidiClass::RightToLeft
+                                )
+                            });
+                        let mirrored_texture = mirrored_rtl_glyph;
 
                         if pos_x > params.pixel_width {
                             log::trace!("breaking on overflow {} > {}", pos_x, params.pixel_width);
@@ -648,7 +665,16 @@ impl crate::TermWindow {
                             );
                             quad.set_fg_color(glyph_color);
                             quad.set_alt_color_and_mix_value(fg_color_alt, fg_color_mix);
-                            quad.set_texture(texture_rect);
+                            // If mirroring this glyph, flip the texture coords horizontally.
+                            if mirrored_texture {
+                                let u1 = texture_rect.min_x();
+                                let u2 = texture_rect.max_x();
+                                let v1 = texture_rect.min_y();
+                                let v2 = texture_rect.max_y();
+                                quad.set_texture_discrete(u2, u1, v1, v2);
+                            } else {
+                                quad.set_texture(texture_rect);
+                            }
                             quad.set_hsv(if glyph.brightness_adjust != 1.0 {
                                 let hsv = hsv.unwrap_or_else(|| HsbTransform::default());
                                 Some(HsbTransform {
@@ -855,9 +881,24 @@ impl crate::TermWindow {
 
             let style_params = last_style.as_ref().expect("we just set it up").clone();
 
+            let shape_direction = if params.config.mirror_rtl_runs
+                && !bidi_enabled
+                && cluster.text.chars().any(|c| {
+                    matches!(
+                        bidi_class_for_char(c),
+                        BidiClass::ArabicLetter | BidiClass::RightToLeft
+                    )
+                })
+            {
+                Direction::RightToLeft
+            } else {
+                cluster.direction
+            };
+
             let glyph_info = self.cached_cluster_shape(
                 style_params.style,
                 &cluster,
+                shape_direction,
                 &gl_state,
                 None,
                 &self.render_metrics,

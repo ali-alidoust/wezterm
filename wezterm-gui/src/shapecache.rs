@@ -9,6 +9,7 @@ use wezterm_font::units::*;
 pub struct ShapeCacheKey {
     pub style: TextStyle,
     pub text: String,
+    pub shape_rtl: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -25,6 +26,7 @@ pub struct ShapedInfo {
     pub glyph: Rc<CachedGlyph>,
     pub pos: GlyphPosition,
     pub block_key: Option<BlockKey>,
+    pub only_char: Option<char>,
 }
 
 impl ShapedInfo {
@@ -47,6 +49,7 @@ impl ShapedInfo {
                 },
                 glyph: Rc::clone(glyph),
                 block_key: info.only_char.and_then(BlockKey::from_char),
+                only_char: info.only_char,
             });
         }
         pos
@@ -62,6 +65,7 @@ impl ShapedInfo {
 pub struct BorrowedShapeCacheKey<'a> {
     pub style: &'a TextStyle,
     pub text: &'a str,
+    pub shape_rtl: bool,
 }
 
 impl<'a> BorrowedShapeCacheKey<'a> {
@@ -69,6 +73,7 @@ impl<'a> BorrowedShapeCacheKey<'a> {
         ShapeCacheKey {
             style: self.style.clone(),
             text: self.text.to_owned(),
+            shape_rtl: self.shape_rtl,
         }
     }
 }
@@ -82,6 +87,7 @@ impl ShapeCacheKeyTrait for ShapeCacheKey {
         BorrowedShapeCacheKey {
             style: &self.style,
             text: &self.text,
+            shape_rtl: self.shape_rtl,
         }
     }
 }
@@ -148,6 +154,7 @@ mod test {
                     Direction::LeftToRight,
                     None,
                     Some(&presentation_width),
+                    false,
                 )
                 .unwrap();
             let mut glyphs = infos
@@ -295,6 +302,7 @@ mod test {
                             Direction::LeftToRight,
                             None,
                             Some(&presentation_width),
+                            false,
                         )
                         .unwrap();
                     // println!("{:?}", &x[0..2]);

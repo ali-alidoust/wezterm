@@ -1010,6 +1010,12 @@ impl Buffer {
         }
     }
 
+    pub fn set_unicode_funcs(&mut self, ufuncs: *mut hb_unicode_funcs_t) {
+        unsafe {
+            hb_buffer_set_unicode_funcs(self.buf, ufuncs);
+        }
+    }
+
     #[allow(dead_code)]
     pub fn set_script(&mut self, script: hb_script_t) {
         unsafe {

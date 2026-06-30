@@ -1,5 +1,6 @@
 use crate::parser::ParsedFont;
 use crate::shaper::{FallbackIdx, FontMetrics, FontShaper, GlyphInfo, PresentationWidth};
+use std::os::raw::c_void;
 use crate::units::*;
 use crate::{ftwrap, hbwrap as harfbuzz};
 use anyhow::{anyhow, Context};
@@ -34,13 +35,27 @@ struct Info {
     y_offset: harfbuzz::hb_position_t,
 }
 
+unsafe extern "C" fn noop_mirroring(
+    _ufuncs: *mut harfbuzz::hb_unicode_funcs_t,
+    unicode: harfbuzz::hb_codepoint_t,
+    _user_data: *mut c_void,
+) -> harfbuzz::hb_codepoint_t {
+    unicode
+}
+
 fn get_only_char(s: &str) -> Option<char> {
     let mut chars = s.chars();
     let first_char = chars.next()?;
-    if chars.next().is_some() {
-        None
-    } else {
+    if chars.next().is_none() {
         Some(first_char)
+    } else {
+        let mut visible = s.chars().filter(|c| *c != '\u{200c}' && *c != '\u{200d}');
+        let first_visible = visible.next()?;
+        if visible.next().is_none() {
+            Some(first_visible)
+        } else {
+            None
+        }
     }
 }
 
@@ -213,8 +228,22 @@ impl HarfbuzzShaper {
         direction: Direction,
         range: Range<usize>,
         presentation_width: Option<&PresentationWidth>,
+        disable_bidi_mirroring: bool,
     ) -> anyhow::Result<Vec<GlyphInfo>> {
         let mut buf = harfbuzz::Buffer::new()?;
+        if disable_bidi_mirroring && direction == Direction::RightToLeft {
+            unsafe {
+                let ufuncs = harfbuzz::hb_unicode_funcs_create(harfbuzz::hb_unicode_funcs_get_default());
+                harfbuzz::hb_unicode_funcs_set_mirroring_func(
+                    ufuncs,
+                    Some(noop_mirroring),
+                    std::ptr::null_mut(),
+                    None,
+                );
+                buf.set_unicode_funcs(ufuncs);
+                harfbuzz::hb_unicode_funcs_destroy(ufuncs);
+            }
+        }
         // We deliberately omit setting the script and leave it to harfbuzz
         // to infer from the buffer contents so that it can correctly
         // enable appropriate preprocessing for eg: Hangul.
@@ -328,6 +357,7 @@ impl HarfbuzzShaper {
                             direction,
                             range,
                             presentation_width,
+                            disable_bidi_mirroring,
                         );
                     }
 
@@ -490,6 +520,7 @@ impl HarfbuzzShaper {
                     // NOT! substr; this is a coalesced sequence of incomplete clusters!
                     first_info.cluster..first_info.cluster + first_info.len,
                     presentation_width,
+                    disable_bidi_mirroring,
                 ) {
                     Ok(shape) => Ok(shape),
                     Err(e) => {
@@ -504,6 +535,7 @@ impl HarfbuzzShaper {
                             direction,
                             sub_range,
                             presentation_width,
+                            disable_bidi_mirroring,
                         )
                     }
                 }?;
@@ -574,6 +606,7 @@ impl FontShaper for HarfbuzzShaper {
         direction: Direction,
         range: Option<Range<usize>>,
         presentation_width: Option<&PresentationWidth>,
+        disable_bidi_mirroring: bool,
     ) -> anyhow::Result<Vec<GlyphInfo>> {
         let range = range.unwrap_or_else(|| 0..text.len());
 
@@ -592,6 +625,7 @@ impl FontShaper for HarfbuzzShaper {
             direction,
             range,
             presentation_width,
+            disable_bidi_mirroring,
         );
         metrics::histogram!("shape.harfbuzz").record(start.elapsed());
         /*
@@ -883,6 +917,7 @@ mod test {
                     Direction::LeftToRight,
                     None,
                     None,
+                    false,
                 )
                 .unwrap();
             assert!(no_glyphs.is_empty(), "{:?}", no_glyphs);
@@ -951,6 +986,7 @@ mod test {
                     Direction::LeftToRight,
                     None,
                     None,
+                    false,
                 )
                 .unwrap();
             assert!(no_glyphs.is_empty(), "{:?}", no_glyphs);
@@ -991,6 +1027,7 @@ mod test {
                     Direction::LeftToRight,
                     None,
                     None,
+                    false,
                 )
                 .unwrap();
             assert!(no_glyphs.is_empty(), "{:?}", no_glyphs);
@@ -1113,6 +1150,7 @@ mod test {
                     Direction::LeftToRight,
                     None,
                     None,
+                    false,
                 )
                 .unwrap();
             assert!(no_glyphs.is_empty(), "{:?}", no_glyphs);
@@ -1182,6 +1220,7 @@ mod test {
                     Direction::LeftToRight,
                     None,
                     None,
+                    false,
                 )
                 .unwrap();
             assert!(no_glyphs.is_empty(), "{:?}", no_glyphs);

@@ -931,6 +931,7 @@ pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyho
                     cluster.direction,
                     None,
                     Some(&presentation_width),
+                    false,
                 )
                 .unwrap();
 
